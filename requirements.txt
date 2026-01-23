@@ -3,3 +3,5 @@ tqdm
 numpy
 pandas
 pyspark
+xgboost
+scikit-learn
