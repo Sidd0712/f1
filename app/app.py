@@ -4,13 +4,13 @@ F1 Race Intelligence — Databricks App (Plans B, G, E).
 Three tabs over three separately-trained model sets:
 - Strategy Simulator (Plan B): pick a driver, team, circuit, and pit-stop
   count, get a predicted stint-by-stint tyre strategy and win probability.
-  Models from notebooks/phase_3_strategy_experimental.ipynb.
+  Models from notebooks/phase_3_strategy.ipynb.
 - Predicted Battles (Plan G): scan a race/lap for drivers running close
   together and get an overtake probability per pair. Model from
   notebooks/phase_3_battles.ipynb.
 - Post-Race Replay (Plan E): replay a finished race lap-by-lap through
   live_model and chart each driver's predicted podium probability over
-  time. Model from notebooks/phase_3.ipynb.
+  time. Model from notebooks/phase_3_ranking.ipynb.
 
 Runs as a lightweight Streamlit web service, separate from any notebook.
 It gets a real Spark session via Databricks Connect (serverless) rather
@@ -163,7 +163,7 @@ def predict_strategy(
 ) -> dict:
     """
     Same modeling logic as phase_4.ipynb's predict_strategy (adapted from
-    phase_3_strategy_experimental.ipynb) — kept in sync manually since an
+    phase_3_strategy.ipynb) — kept in sync manually since an
     App can't import a notebook. Returns {"strategy": [...], "win_probability": float}.
     """
     backend = load_backend()
@@ -983,7 +983,7 @@ st.markdown(
       <h1 class="f1-title">Race Intelligence</h1>
       <p class="f1-subtitle">
         Strategy simulation, predicted battles, and post-race probability replay — from the
-        models trained in phase_3.ipynb, phase_3_strategy_experimental.ipynb, and phase_3_battles.ipynb.
+        models trained in phase_3_ranking.ipynb, phase_3_strategy.ipynb, and phase_3_battles.ipynb.
       </p>
     </div>
     """,
