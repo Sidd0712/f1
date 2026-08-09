@@ -1,0 +1,22 @@
+[theme]
+base = "dark"
+primaryColor = "#E10600"
+backgroundColor = "#0C0C10"
+secondaryBackgroundColor = "#17171C"
+textColor = "#F5F5F7"
+linkColor = "#FF3B30"
+borderColor = "#2A2A32"
+font = "'Titillium Web':https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&display=swap"
+headingFont = "'Titillium Web':https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&display=swap"
+codeFont = "monospace"
+baseFontSize = 16
+baseRadius = "none"
+buttonRadius = "none"
+showWidgetBorder = true
+
+[theme.sidebar]
+backgroundColor = "#111116"
+secondaryBackgroundColor = "#1B1B22"
+primaryColor = "#E10600"
+textColor = "#F5F5F7"
+borderColor = "#2A2A32"

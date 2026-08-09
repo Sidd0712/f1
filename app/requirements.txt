@@ -1,0 +1,10 @@
+# NOTE: databricks-connect and pyspark are mutually exclusive in the same
+# environment (they conflict at import time) -- do not add a plain
+# `pyspark` line here. databricks-connect provides the PySpark-compatible
+# API this app needs (DatabricksSession, PipelineModel, functions).
+databricks-connect
+streamlit
+xgboost
+numpy
+pandas
+mlflow
