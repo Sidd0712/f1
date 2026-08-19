@@ -35,6 +35,8 @@ fails, so the app still functions either way.
 
 import html
 import json
+import os
+import tempfile
 
 import mlflow
 import mlflow.xgboost
@@ -43,7 +45,6 @@ import pandas as pd
 import streamlit as st
 from databricks.connect.session import DatabricksSession
 from mlflow import MlflowClient
-from pyspark.ml import PipelineModel
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from xgboost import XGBClassifier, XGBRegressor
@@ -65,7 +66,7 @@ FEATURES_LIVE = [
     "Compound", "TyreLife", "Stint", "TrackStatus", "tyre_degradation_rate",
     "AirTemp_delta", "TrackTemp_delta", "Humidity_delta", "WindSpeed_delta",
 ]
-CATEGORICAL_LIVE = ["Compound", "RacePhase"]
+CATEGORICAL_LIVE = ["Compound", "RacePhase", "TrackStatus"]
 
 # Pirelli / F1 broadcast-graphic compound colors.
 COMPOUND_COLORS = {
@@ -90,27 +91,57 @@ def load_backend():
     """Spark session + trained models — expensive, loaded once per app instance."""
     spark = DatabricksSession.builder.serverless().getOrCreate()
 
-    preproc_model = PipelineModel.load(f"{STRATEGY_VOLUME_DIR}/preproc_pipeline")
+    # NOT loaded via pyspark.ml.PipelineModel.load(): that goes through
+    # pyspark.ml's classic JVM-backed reader (_jvm() -> needs a real
+    # SparkContext), which a Databricks App's Spark Connect session
+    # (databricks-connect) has no JVM gateway to reach --
+    # "AttributeError: Cannot load _jvm from SparkContext". Instead this
+    # loads the plain-JSON params phase_3_strategy.ipynb exports from the
+    # fitted pipeline (StringIndexer label orderings + StandardScaler
+    # mean/std), and _build_feature_vector() below reimplements the same
+    # StringIndexer -> OneHotEncoder -> VectorAssembler -> StandardScaler
+    # transform in pure NumPy -- verified to match the real fitted
+    # pipeline's output in that notebook before being trusted here.
+    # Read JSON file through Spark (Apps don't have direct /Volumes/ filesystem access)
+    preproc_params_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/preproc_params.json", wholetext=True).first()[0]
+    preproc_params = json.loads(preproc_params_text)
 
+    # Load XGBoost models and JSON via Spark, write to temp files
+    tmpdir = tempfile.mkdtemp()
+
+    # Strategy models
+    for model_file in ["m1_compound_classifier.json", "m2_pitlap_regressor.json", "m3_win_classifier.json"]:
+        model_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/{model_file}", wholetext=True).first()[0]
+        with open(os.path.join(tmpdir, model_file), 'w') as f:
+            f.write(model_text)
+    
     m1 = XGBClassifier()
-    m1.load_model(f"{STRATEGY_VOLUME_DIR}/m1_compound_classifier.json")
+    m1.load_model(os.path.join(tmpdir, "m1_compound_classifier.json"))
 
     m2 = XGBRegressor()
-    m2.load_model(f"{STRATEGY_VOLUME_DIR}/m2_pitlap_regressor.json")
+    m2.load_model(os.path.join(tmpdir, "m2_pitlap_regressor.json"))
 
     m3 = XGBClassifier()
-    m3.load_model(f"{STRATEGY_VOLUME_DIR}/m3_win_classifier.json")
+    m3.load_model(os.path.join(tmpdir, "m3_win_classifier.json"))
 
-    with open(f"{STRATEGY_VOLUME_DIR}/compound_label_map.json") as f:
-        compound_idx_to_name = {int(k): v for k, v in json.load(f).items()}
+    compound_label_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/compound_label_map.json", wholetext=True).first()[0]
+    compound_idx_to_name = {int(k): v for k, v in json.loads(compound_label_text).items()}
 
     driver_profile = spark.table("workspace.default.f1_strategy_driver_profile")
     constructor_profile = spark.table("workspace.default.f1_strategy_constructor_profile")
     circuit_profile = spark.table("workspace.default.f1_strategy_circuit_profile")
     cleaned_laps = spark.table("workspace.default.f1_cleaned_lap_dataset")
 
+    # Same Spark-read + tempfile workaround as m1/m2/m3 above -- XGBoost's
+    # load_model() does its own plain fopen() internally, which hits the
+    # same missing-direct-/Volumes/-access problem a raw open() does.
+    battle_model_text = spark.read.text(f"{BATTLE_VOLUME_DIR}/m_overtake_classifier.json", wholetext=True).first()[0]
+    battle_model_path = os.path.join(tmpdir, "m_overtake_classifier.json")
+    with open(battle_model_path, 'w') as f:
+        f.write(battle_model_text)
+
     battle_model = XGBClassifier()
-    battle_model.load_model(f"{BATTLE_VOLUME_DIR}/m_overtake_classifier.json")
+    battle_model.load_model(battle_model_path)
     circuit_overtake_prior = spark.table("workspace.default.f1_circuit_overtake_prior")
 
     # live_model.json is workspace-relative to notebooks/, unreachable from
@@ -123,7 +154,7 @@ def load_backend():
 
     return {
         "spark": spark,
-        "preproc_model": preproc_model,
+        "preproc_params": preproc_params,
         "m1": m1,
         "m2": m2,
         "m3": m3,
@@ -152,6 +183,52 @@ def load_options():
     return drivers, teams, circuits, years
 
 
+@st.cache_data(ttl=3600)
+def load_circuit_typical_laps():
+    """Circuit -> typical race distance in laps (max laps completed by any
+    driver at that circuit across training data -- see CircuitTypicalLaps
+    in phase_3_strategy.ipynb's circuit_profile). Used to default the
+    Strategy Simulator's Race Distance field per circuit instead of a flat
+    manual guess disconnected from which track is selected.
+    """
+    backend = load_backend()
+    rows = backend["circuit_profile"].select("Circuit", "CircuitTypicalLaps").collect()
+    return {r["Circuit"]: int(r["CircuitTypicalLaps"]) for r in rows if r["CircuitTypicalLaps"] is not None}
+
+
+def _build_feature_vector(row_dict, driver, team, circuit, preproc_params):
+    """Pure-NumPy reimplementation of the fitted Spark preprocessing
+    pipeline's transform (StringIndexer -> OneHotEncoder -> VectorAssembler
+    -> StandardScaler) -- see phase_3_strategy.ipynb's export/verify cells
+    for why this exists and how it was checked against the real pipeline.
+    """
+    cat_values = {"Circuit": circuit, "TeamName": team, "Driver": driver}
+    vec = [float(row_dict[nf]) for nf in preproc_params["numeric_features"]]
+    for c in preproc_params["cat_features"]:
+        labels = preproc_params["cat_labels"][c]
+        n = len(labels)
+        # Width is n, not n-1: the StringIndexer behind these labels uses
+        # handleInvalid="keep", which reserves an extra "unseen" bucket in
+        # the category-count metadata beyond these n real labels.
+        # OneHotEncoder's default dropLast=True drops THAT phantom bucket,
+        # not one of the n real labels, so every real label gets its own
+        # column (verified against the real fitted pipeline in
+        # phase_3_strategy.ipynb's export/verify cells).
+        oh = [0.0] * n
+        val = cat_values[c]
+        if val in labels:
+            oh[labels.index(val)] = 1.0
+        # Unseen categories fall through as all-zero -- that's also the
+        # correct behavior: an unseen value would map to the phantom
+        # bucket, which is exactly the one OneHotEncoder drops.
+        vec.extend(oh)
+    x = np.array(vec, dtype=float)
+    mean = np.array(preproc_params["scaler_mean"])
+    std = np.array(preproc_params["scaler_std"])
+    out = np.where(std != 0, (x - mean) / np.where(std == 0, 1.0, std), 0.0)
+    return out.reshape(1, -1)
+
+
 def predict_strategy(
     driver: str,
     team: str,
@@ -163,12 +240,16 @@ def predict_strategy(
 ) -> dict:
     """
     Same modeling logic as phase_4.ipynb's predict_strategy (adapted from
-    phase_3_strategy.ipynb) — kept in sync manually since an
-    App can't import a notebook. Returns {"strategy": [...], "win_probability": float}.
+    phase_3_strategy.ipynb) — kept in sync manually since an App can't
+    import a notebook. One deliberate divergence: preprocessing here uses
+    _build_feature_vector() (pure NumPy) instead of the Spark ML
+    PipelineModel phase_4.ipynb uses, since pyspark.ml.PipelineModel.load()
+    doesn't work from this App's Spark-Connect-only session (see
+    load_backend()'s comment). Same output contract either way.
+    Returns {"strategy": [...], "win_probability": float}.
     """
     backend = load_backend()
-    spark = backend["spark"]
-    preproc_model = backend["preproc_model"]
+    preproc_params = backend["preproc_params"]
     m1, m2, m3 = backend["m1"], backend["m2"], backend["m3"]
     compound_idx_to_name = backend["compound_idx_to_name"]
     driver_profile = backend["driver_profile"]
@@ -271,23 +352,7 @@ def predict_strategy(
             "NextPitLap": float(total_laps),
         }
 
-        row_spark = spark.createDataFrame([row_dict])
-        for cat in CAT_FEATURES:
-            row_spark = row_spark.withColumn(
-                cat, F.lit(driver if cat == "Driver" else (team if cat == "TeamName" else circuit))
-            )
-
-        pipe_cols = (
-            ["CompoundLabel", "features_raw", "features"]
-            + [c + "_idx" for c in CAT_FEATURES]
-            + [c + "_ohe" for c in CAT_FEATURES]
-        )
-        for c in pipe_cols:
-            if c in row_spark.columns:
-                row_spark = row_spark.drop(c)
-
-        row_proc = preproc_model.transform(row_spark)
-        feat_arr = np.array([row_proc.select("features").first()[0].toArray()])
+        feat_arr = _build_feature_vector(row_dict, driver, team, circuit, preproc_params)
 
         prob_vec = m1.predict_proba(feat_arr)[0]
         comp_prefs = [(compound_idx_to_name.get(i, "SOFT"), p) for i, p in enumerate(prob_vec)]
@@ -343,21 +408,7 @@ def predict_strategy(
 
     wp_dict = dict(row_dict)
     wp_dict["StintCompound"] = strategy[0]["compound"]
-    wp_row = spark.createDataFrame([wp_dict])
-    for cat in CAT_FEATURES:
-        wp_row = wp_row.withColumn(
-            cat, F.lit(driver if cat == "Driver" else (team if cat == "TeamName" else circuit))
-        )
-    pipe_cols = (
-        ["CompoundLabel", "features_raw", "features"]
-        + [c + "_idx" for c in CAT_FEATURES]
-        + [c + "_ohe" for c in CAT_FEATURES]
-    )
-    for c in pipe_cols:
-        if c in wp_row.columns:
-            wp_row = wp_row.drop(c)
-    wp_proc = preproc_model.transform(wp_row)
-    wp_arr = np.array([wp_proc.select("features").first()[0].toArray()])
+    wp_arr = _build_feature_vector(wp_dict, driver, team, circuit, preproc_params)
     raw_win_prob = float(m3.predict_proba(wp_arr)[0, 1])
 
     grid_baseline = (
@@ -366,9 +417,13 @@ def predict_strategy(
         0.15 if quali_position == 3 else
         max(0.01, 0.10 - quali_position * 0.01)
     )
-    driver_factor = drv_win_rate * 2.0
+    driver_factor = min(1.0, drv_win_rate * 2.0)
     threat_penalty = max(0, threat_score - drv_win_rate) * 0.5
-    calibrated_prob = (raw_win_prob * 3.0) + grid_baseline + (driver_factor * 0.5) - threat_penalty
+    # Weighted blend (weights sum to 1.0) so no single term can force
+    # saturation on its own -- the old (raw*3.0)+grid+driver stacking could
+    # exceed 1.0 before the 0.999 cap for almost any front-running or
+    # decent-win-rate driver, making every prediction read ~99.9%.
+    calibrated_prob = (0.55 * raw_win_prob) + (0.30 * grid_baseline) + (0.15 * driver_factor) - threat_penalty
     win_prob = max(0.001, min(0.999, calibrated_prob))
 
     return {"strategy": strategy, "win_probability": win_prob, "threat_score": threat_score}
@@ -992,16 +1047,35 @@ st.markdown(
 
 with st.spinner("Connecting to Spark and loading models..."):
     drivers, teams, circuits, years = load_options()
+    circuit_typical_laps = load_circuit_typical_laps()
+
+DEFAULT_RACE_LAPS = 55
 
 with st.sidebar:
     st.markdown('<p class="pitwall-label">Race Setup</p>', unsafe_allow_html=True)
+    # Circuit lives outside the form, deliberately: widgets inside st.form()
+    # don't trigger a rerun until submit, so Race Distance below couldn't
+    # react to the circuit choice if this stayed in there with everything
+    # else. This is the one field that needs to be "live".
+    circuit = st.selectbox("Circuit", circuits, key="circuit_select")
     with st.form("strategy_form"):
         driver = st.selectbox("Driver", drivers, index=drivers.index("HAM") if "HAM" in drivers else 0)
         team = st.selectbox("Team", teams)
-        circuit = st.selectbox("Circuit", circuits)
         year = st.selectbox("Season (driver/car form)", years, index=len(years) - 1)
         quali_position = st.number_input("Starting grid position", min_value=1, max_value=20, value=1)
-        total_laps = st.number_input("Race distance (laps)", min_value=20, max_value=90, value=55)
+        # key includes circuit so switching circuits resets the field to
+        # that circuit's own default/prior value, rather than Streamlit
+        # preserving whatever number was left over from a different track
+        # (value= only sets a widget's default the first time it's ever
+        # rendered under a given key -- it's ignored on later reruns, so a
+        # fixed key wouldn't actually update when circuit changes).
+        total_laps = st.number_input(
+            "Race distance (laps)",
+            min_value=20, max_value=90,
+            value=circuit_typical_laps.get(circuit, DEFAULT_RACE_LAPS),
+            key=f"total_laps_{circuit}",
+            help="Defaults to this circuit's typical race distance from training data -- override if needed.",
+        )
         num_pit_stops = st.slider("Number of pit stops", min_value=1, max_value=3, value=1)
         submitted = st.form_submit_button("Predict Strategy", type="primary", use_container_width=True)
 
