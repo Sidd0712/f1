@@ -5,12 +5,11 @@ Three tabs over three separately-trained model sets:
 - Strategy Simulator (Plan B): pick a driver, team, circuit, and pit-stop
   count, get a predicted stint-by-stint tyre strategy and win probability.
   Models from notebooks/phase_3_strategy.ipynb.
-- Predicted Battles (Plan G): scan a race/lap for drivers running close
-  together and get an overtake probability per pair. Model from
-  notebooks/phase_3_battles.ipynb.
-- Post-Race Replay (Plan E): replay a finished race lap-by-lap through
-  live_model and chart each driver's predicted podium probability over
-  time. Model from notebooks/phase_3_ranking.ipynb.
+- Race Replay (Plans E, G): replay a finished race lap by lap as a full
+  20-car grid of cards, a battle board, tyre and position charts, and key
+  moments. Reads the precomputed f1_replay_lap_state / f1_battle_pairs /
+  f1_battle_bands tables from notebooks/phase_3_battles.ipynb; the optional
+  podium-chance trace runs live_model from notebooks/phase_3_ranking.ipynb.
 
 Runs as a lightweight Streamlit web service, separate from any notebook.
 It gets a real Spark session via Databricks Connect (serverless) rather
@@ -46,20 +45,14 @@ import streamlit as st
 from databricks.connect.session import DatabricksSession
 from mlflow import MlflowClient
 from pyspark.sql import functions as F
-from pyspark.sql.window import Window
-from xgboost import XGBClassifier, XGBRegressor
+from xgboost import XGBClassifier
+
+import future as fu
+import replay as rp
 
 STRATEGY_VOLUME_DIR = "/Volumes/workspace/default/f1_data/strategy_models"
-BATTLE_VOLUME_DIR = "/Volumes/workspace/default/f1_data/battle_models"
 CAT_FEATURES = ["Circuit", "TeamName", "Driver"]
 TYRE_LIFE_LIMITS = {"SOFT": 25, "MEDIUM": 40, "HARD": 55, "INTERMEDIATE": 30, "WET": 40}
-
-BATTLE_FEATURES = [
-    "Gap", "GapClosingRate", "TyreLifeDelta",
-    "TrailingCompound", "LeadingCompound",
-    "SpeedST_Delta", "CircuitOvertakePrior",
-]
-BATTLE_CATEGORICAL = ["TrailingCompound", "LeadingCompound"]
 
 FEATURES_LIVE = [
     "LapNumber", "RacePhase", "Position", "GapToAhead", "DeltaToLeader",
@@ -86,6 +79,20 @@ COMPOUND_TEXT_COLORS = {
 }
 
 
+class NumericLogit:
+    # logistic regression over the scaled numeric block (first n_num columns) of the shared feature vector
+    def __init__(self, coef, intercept, n_num):
+        self.coef_ = np.asarray(coef, dtype=float)
+        self.intercept_ = float(intercept)
+        self.n_num = int(n_num)
+        self.feature_importances_ = np.abs(self.coef_) / np.abs(self.coef_).sum()
+
+    def predict_proba(self, X):
+        z = np.nan_to_num(np.asarray(X, dtype=float)[:, :self.n_num]) @ self.coef_ + self.intercept_
+        p = 1.0 / (1.0 + np.exp(-z))
+        return np.column_stack([1.0 - p, p])
+
+
 @st.cache_resource
 def load_backend():
     """Spark session + trained models — expensive, loaded once per app instance."""
@@ -110,7 +117,7 @@ def load_backend():
     tmpdir = tempfile.mkdtemp()
 
     # Strategy models
-    for model_file in ["m1_compound_classifier.json", "m2_pitlap_regressor.json", "m3_win_classifier.json"]:
+    for model_file in ["m1_compound_classifier.json"]:
         model_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/{model_file}", wholetext=True).first()[0]
         with open(os.path.join(tmpdir, model_file), 'w') as f:
             f.write(model_text)
@@ -118,11 +125,8 @@ def load_backend():
     m1 = XGBClassifier()
     m1.load_model(os.path.join(tmpdir, "m1_compound_classifier.json"))
 
-    m2 = XGBRegressor()
-    m2.load_model(os.path.join(tmpdir, "m2_pitlap_regressor.json"))
-
-    m3 = XGBClassifier()
-    m3.load_model(os.path.join(tmpdir, "m3_win_classifier.json"))
+    m3_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/m3_win_logit.json", wholetext=True).first()[0]
+    m3 = NumericLogit(**json.loads(m3_text))
 
     compound_label_text = spark.read.text(f"{STRATEGY_VOLUME_DIR}/compound_label_map.json", wholetext=True).first()[0]
     compound_idx_to_name = {int(k): v for k, v in json.loads(compound_label_text).items()}
@@ -131,18 +135,6 @@ def load_backend():
     constructor_profile = spark.table("workspace.default.f1_strategy_constructor_profile")
     circuit_profile = spark.table("workspace.default.f1_strategy_circuit_profile")
     cleaned_laps = spark.table("workspace.default.f1_cleaned_lap_dataset")
-
-    # Same Spark-read + tempfile workaround as m1/m2/m3 above -- XGBoost's
-    # load_model() does its own plain fopen() internally, which hits the
-    # same missing-direct-/Volumes/-access problem a raw open() does.
-    battle_model_text = spark.read.text(f"{BATTLE_VOLUME_DIR}/m_overtake_classifier.json", wholetext=True).first()[0]
-    battle_model_path = os.path.join(tmpdir, "m_overtake_classifier.json")
-    with open(battle_model_path, 'w') as f:
-        f.write(battle_model_text)
-
-    battle_model = XGBClassifier()
-    battle_model.load_model(battle_model_path)
-    circuit_overtake_prior = spark.table("workspace.default.f1_circuit_overtake_prior")
 
     # live_model.json is workspace-relative to notebooks/, unreachable from
     # this App's own container — loaded from the UC model registry instead.
@@ -156,15 +148,12 @@ def load_backend():
         "spark": spark,
         "preproc_params": preproc_params,
         "m1": m1,
-        "m2": m2,
         "m3": m3,
         "compound_idx_to_name": compound_idx_to_name,
         "driver_profile": driver_profile,
         "constructor_profile": constructor_profile,
         "circuit_profile": circuit_profile,
         "cleaned_laps": cleaned_laps,
-        "battle_model": battle_model,
-        "circuit_overtake_prior": circuit_overtake_prior,
         "live_model": live_model,
         "ml_lap_dataset": ml_lap_dataset,
     }
@@ -194,6 +183,41 @@ def load_circuit_typical_laps():
     backend = load_backend()
     rows = backend["circuit_profile"].select("Circuit", "CircuitTypicalLaps").collect()
     return {r["Circuit"]: int(r["CircuitTypicalLaps"]) for r in rows if r["CircuitTypicalLaps"] is not None}
+
+
+@st.cache_data(ttl=3600)
+def load_races():
+    """(Year, Circuit) -> race names, since a circuit can host 2 races in one season."""
+    rows = load_backend()["spark"].table("workspace.default.f1_replay_lap_state").select("Year", "Circuit", "Race").distinct().collect()
+    races = {}
+    for r in rows:
+        races.setdefault((r["Year"], r["Circuit"]), []).append(r["Race"])
+    return {k: sorted(v) for k, v in races.items()}
+
+
+@st.cache_resource(ttl=3600)
+def load_future_model():
+    spark = load_backend()["spark"]
+    t = lambda n: spark.table(f"workspace.default.{n}").toPandas()
+    return fu.FutureModel(t("f1_podium_model")["Json"].iloc[0], t("f1_podium_driver_form"), t("f1_podium_team_form"), t("f1_podium_circuits"), t("f1_podium_recent_grids"))
+
+
+@st.cache_resource(ttl=3600, max_entries=6)
+def load_race_view(year, race):
+    spark = load_backend()["spark"]
+    by_race = (F.col("Year") == int(year)) & (F.col("Race") == race)
+    state = spark.table("workspace.default.f1_replay_lap_state").filter(by_race).toPandas()
+    pairs = spark.table("workspace.default.f1_battle_pairs").filter(by_race).toPandas()
+    bands = spark.table("workspace.default.f1_battle_bands").toPandas()
+    return rp.RaceView(state, pairs, bands)
+
+
+def pick_race(year, circuit, key):
+    # Race dropdown, only shown when the season ran 2+ races at this circuit
+    options = load_races().get((int(year), circuit), [])
+    if len(options) > 1:
+        return st.selectbox("Race", options, key=key)
+    return options[0] if options else None
 
 
 def _build_feature_vector(row_dict, driver, team, circuit, preproc_params):
@@ -250,7 +274,7 @@ def predict_strategy(
     """
     backend = load_backend()
     preproc_params = backend["preproc_params"]
-    m1, m2, m3 = backend["m1"], backend["m2"], backend["m3"]
+    m1, m3 = backend["m1"], backend["m3"]
     compound_idx_to_name = backend["compound_idx_to_name"]
     driver_profile = backend["driver_profile"]
     constructor_profile = backend["constructor_profile"]
@@ -315,16 +339,10 @@ def predict_strategy(
         row_dict = {
             "Stint": stint_num,
             "StintStartLap": current_lap,
-            "StintLength": max(1, total_laps - current_lap),
             "StintStartFrac": lap_frac,
-            "StintAvgLapTime": 95.0,
-            "StintBestLap": 92.0,
             "QualiPosition": quali_position,
             "TotalLaps": total_laps,
             "NumStints": total_stints,
-            "AvgGapToAhead": 1.5,
-            "AvgDeltaToLeader": max(0, (current_pos - 1) * 1.2),
-            "PositionAtStintEnd": current_pos,
             "AirTemp_C": 22.0,
             "TrackTemp_C": cir_avg_temp,
             "Humidity_pct": 40.0,
@@ -384,7 +402,7 @@ def predict_strategy(
         if stint_num == total_stints:
             next_pit = total_laps
         else:
-            p_lap = int(round(float(m2.predict(feat_arr)[0])))
+            p_lap = int(round(current_lap + (total_laps - current_lap) / (total_stints - stint_num + 1)))  # even split of remaining laps
             max_laps_for_compound = TYRE_LIFE_LIMITS.get(compound, 30)
             p_lap = min(p_lap, current_lap + max_laps_for_compound)
             p_lap = max(p_lap, current_lap + 5)
@@ -411,122 +429,17 @@ def predict_strategy(
     wp_arr = _build_feature_vector(wp_dict, driver, team, circuit, preproc_params)
     raw_win_prob = float(m3.predict_proba(wp_arr)[0, 1])
 
-    grid_baseline = (
-        0.40 if quali_position == 1 else
-        0.25 if quali_position == 2 else
-        0.15 if quali_position == 3 else
-        max(0.01, 0.10 - quali_position * 0.01)
-    )
-    driver_factor = min(1.0, drv_win_rate * 2.0)
-    threat_penalty = max(0, threat_score - drv_win_rate) * 0.5
-    # Weighted blend (weights sum to 1.0) so no single term can force
-    # saturation on its own -- the old (raw*3.0)+grid+driver stacking could
-    # exceed 1.0 before the 0.999 cap for almost any front-running or
-    # decent-win-rate driver, making every prediction read ~99.9%.
-    calibrated_prob = (0.55 * raw_win_prob) + (0.30 * grid_baseline) + (0.15 * driver_factor) - threat_penalty
-    win_prob = max(0.001, min(0.999, calibrated_prob))
+    win_prob = max(0.001, min(0.999, raw_win_prob))
 
     return {"strategy": strategy, "win_probability": win_prob, "threat_score": threat_score}
 
 
-def predict_overtake_probability(gap, gap_closing_rate, tyre_life_delta, trailing_compound, leading_compound, speedst_delta, circuit_overtake_prior):
+def replay_race(year, circuit, race=None):
     backend = load_backend()
-    row = pd.DataFrame([{
-        "Gap": gap,
-        "GapClosingRate": gap_closing_rate,
-        "TyreLifeDelta": tyre_life_delta,
-        "TrailingCompound": trailing_compound,
-        "LeadingCompound": leading_compound,
-        "SpeedST_Delta": speedst_delta,
-        "CircuitOvertakePrior": circuit_overtake_prior,
-    }])
-    for c in BATTLE_CATEGORICAL:
-        row[c] = row[c].astype("category")
-    return float(backend["battle_model"].predict_proba(row[BATTLE_FEATURES])[0, 1])
-
-
-def predict_battles(year, circuit, lap_number, gap_threshold=3.0):
-    backend = load_backend()
-    spark = backend["spark"]
-
-    race_laps = backend["cleaned_laps"].filter(
-        (F.col("Year") == year) & (F.col("Circuit") == circuit)
-    )
-    closing_window = Window.partitionBy("Driver").orderBy("LapNumber").rowsBetween(-2, 0)
-
-    pos_df = race_laps.select(
-        "LapNumber", "Driver", "Position", "GapToAhead", "TyreLife", "Compound", "SpeedST"
-    ).dropDuplicates(["Driver", "LapNumber"])
-
-    pos_df = (
-        pos_df
-        .withColumn("_gc_n", F.count("GapToAhead").over(closing_window))
-        .withColumn("_gc_sum_x", F.sum("LapNumber").over(closing_window))
-        .withColumn("_gc_sum_y", F.sum("GapToAhead").over(closing_window))
-        .withColumn("_gc_sum_xy", F.sum(F.col("LapNumber") * F.col("GapToAhead")).over(closing_window))
-        .withColumn("_gc_sum_xx", F.sum(F.col("LapNumber") * F.col("LapNumber")).over(closing_window))
-    )
-    _gc_denom = F.col("_gc_n") * F.col("_gc_sum_xx") - F.col("_gc_sum_x") * F.col("_gc_sum_x")
-    pos_df = pos_df.withColumn(
-        "gap_closing_rate",
-        F.when(
-            (F.col("_gc_n") >= 2) & (_gc_denom != 0),
-            (F.col("_gc_n") * F.col("_gc_sum_xy") - F.col("_gc_sum_x") * F.col("_gc_sum_y")) / _gc_denom
-        ).otherwise(F.lit(None).cast("double"))
-    ).drop("_gc_n", "_gc_sum_x", "_gc_sum_y", "_gc_sum_xy", "_gc_sum_xx")
-
-    lap_state = pos_df.filter(F.col("LapNumber") == lap_number)
-    trailing = lap_state.alias("t")
-    leading = lap_state.alias("l")
-
-    pairs = (
-        trailing.join(leading, F.col("t.Position") == F.col("l.Position") + 1)
-        .filter((F.col("t.GapToAhead") > 0) & (F.col("t.GapToAhead") <= gap_threshold))
-        .select(
-            F.col("t.Driver").alias("TrailingDriver"),
-            F.col("l.Driver").alias("LeadingDriver"),
-            F.col("t.GapToAhead").alias("Gap"),
-            F.col("t.gap_closing_rate").alias("GapClosingRate"),
-            (F.col("t.TyreLife") - F.col("l.TyreLife")).alias("TyreLifeDelta"),
-            F.col("t.Compound").alias("TrailingCompound"),
-            F.col("l.Compound").alias("LeadingCompound"),
-            (F.col("t.SpeedST") - F.col("l.SpeedST")).alias("SpeedST_Delta"),
-        )
-        .toPandas()
-    )
-
-    prior_row = backend["circuit_overtake_prior"].filter(F.col("Circuit") == circuit).first()
-    circuit_prior = float(prior_row["CircuitOvertakePrior"]) if prior_row and prior_row["CircuitOvertakePrior"] is not None else 0.15
-
-    battles = []
-    for _, row in pairs.iterrows():
-        prob = predict_overtake_probability(
-            gap=row["Gap"],
-            gap_closing_rate=row["GapClosingRate"],
-            tyre_life_delta=row["TyreLifeDelta"],
-            trailing_compound=row["TrailingCompound"],
-            leading_compound=row["LeadingCompound"],
-            speedst_delta=row["SpeedST_Delta"],
-            circuit_overtake_prior=circuit_prior,
-        )
-        battles.append({
-            "trailing_driver": row["TrailingDriver"],
-            "leading_driver": row["LeadingDriver"],
-            "gap": float(row["Gap"]),
-            "overtake_probability": prob,
-        })
-
-    return sorted(battles, key=lambda b: -b["overtake_probability"])
-
-
-def replay_race(year, circuit):
-    backend = load_backend()
-    race_df = (
-        backend["ml_lap_dataset"]
-        .filter((F.col("Year") == year) & (F.col("Circuit") == circuit))
-        .select(FEATURES_LIVE + ["Driver", "FinalPosition"])
-        .toPandas()
-    )
+    race_sdf = backend["ml_lap_dataset"].filter((F.col("Year") == year) & (F.col("Circuit") == circuit))
+    if race is not None:
+        race_sdf = race_sdf.filter(F.col("Race") == race)
+    race_df = race_sdf.select(FEATURES_LIVE + ["Driver", "FinalPosition"]).toPandas()
     for c in CATEGORICAL_LIVE:
         race_df[c] = race_df[c].astype("category")
 
@@ -991,39 +904,6 @@ def render_stint_table(strategy: list) -> str:
     """
 
 
-def render_battle_ticker(battles: list) -> str:
-    if not battles:
-        return '<div class="battle-ticker-wrap"><div class="battle-ticker-track"><span class="battle-ticker-item">No battles within the gap threshold on this lap</span></div></div>'
-    items = "".join(
-        f"""<span class="battle-ticker-item">
-              {html.escape(b['trailing_driver'])} CLOSING ON {html.escape(b['leading_driver'])}
-              <span class="sep">&middot;</span>
-              <span class="prob">{b['overtake_probability'] * 100:.0f}%</span> OVERTAKE CHANCE
-              <span class="sep">&middot;</span> GAP {b['gap']:.1f}s
-            </span>"""
-        for b in battles
-    )
-    return f'<div class="battle-ticker-wrap"><div class="battle-ticker-track">{items}{items}</div></div>'
-
-
-def render_battle_table(battles: list) -> str:
-    rows = []
-    for b in battles:
-        rows.append(f"""
-        <tr>
-          <td>{html.escape(b['trailing_driver'])} &rarr; {html.escape(b['leading_driver'])}</td>
-          <td>{b['gap']:.2f}s</td>
-          <td>{b['overtake_probability'] * 100:.1f}%</td>
-        </tr>
-        """)
-    return f"""
-    <table class="f1-table">
-      <thead><tr><th>Battle</th><th>Gap</th><th>Overtake Chance</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table>
-    """
-
-
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
@@ -1037,8 +917,8 @@ st.markdown(
       <p class="f1-eyebrow">Pit Wall &middot; Prediction Suite</p>
       <h1 class="f1-title">Race Intelligence</h1>
       <p class="f1-subtitle">
-        Strategy simulation, predicted battles, and post-race probability replay — from the
-        models trained in phase_3_ranking.ipynb, phase_3_strategy.ipynb, and phase_3_battles.ipynb.
+        Strategy simulation and a full-grid race replay with battles, tyres and key moments —
+        built on phase_3_strategy.ipynb, phase_3_ranking.ipynb, and phase_3_battles.ipynb.
       </p>
     </div>
     """,
@@ -1079,7 +959,7 @@ with st.sidebar:
         num_pit_stops = st.slider("Number of pit stops", min_value=1, max_value=3, value=1)
         submitted = st.form_submit_button("Predict Strategy", type="primary", use_container_width=True)
 
-tab_strategy, tab_battles, tab_replay = st.tabs(["Strategy Simulator", "Predicted Battles", "Post-Race Replay"])
+tab_strategy, tab_replay, tab_future = st.tabs(["Strategy Simulator", "Race Replay", "Future Race"])
 
 with tab_strategy:
     if not submitted:
@@ -1130,104 +1010,194 @@ with tab_strategy:
         st.markdown(
             """
             <div class="f1-footer">
-              Win probability is a heuristic blend of the model's raw prediction with grid-position
-              baselines and driver form — see predict_strategy in phase_4.ipynb for the exact calibration.
-            </div>
+              Win probability is the win-probability model's output, driven by grid position, driver and car form, and the win rates of the cars starting ahead. It does not model race-day events.
+              </div>
             """,
             unsafe_allow_html=True,
         )
 
-with tab_battles:
-    st.markdown('<p class="pitwall-label">Scan For Close Battles</p>', unsafe_allow_html=True)
-    b_col1, b_col2, b_col3, b_col4 = st.columns([2, 2, 1, 1])
-    with b_col1:
-        battle_year = st.selectbox("Season", years, index=len(years) - 1, key="battle_year")
-    with b_col2:
-        battle_circuit = st.selectbox("Circuit", circuits, key="battle_circuit")
-    with b_col3:
-        battle_lap = st.number_input("Lap", min_value=1, max_value=90, value=10, key="battle_lap")
-    with b_col4:
-        st.markdown("<div style='height: 1.6rem;'></div>", unsafe_allow_html=True)
-        battle_go = st.button("Scan Battles", type="primary", use_container_width=True)
-
-    if battle_go:
-        with st.spinner("Scanning for close battles..."):
-            battles = predict_battles(int(battle_year), battle_circuit, int(battle_lap))
-        st.markdown(render_battle_ticker(battles), unsafe_allow_html=True)
-        if battles:
-            st.markdown(render_battle_table(battles), unsafe_allow_html=True)
-    else:
-        st.markdown(
-            """
-            <div class="lights-panel">
-              <div class="lights-caption">Pick a season, circuit, and lap, then scan for close battles</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown(
-        """
-        <div class="f1-footer">
-          Overtake chance comes from battle_model in phase_3_battles.ipynb — gap, gap-closing
-          rate, tyre-life/compound delta, speed-trap delta, and a circuit overtake-difficulty prior.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+TOUR_STEPS = """
+**A lap** is one trip around the track. **P1** is first place; the list below is the running order.
+**A gap** is how many seconds a car is behind the one in front. When a gap is under 1 second, the chaser is in position to attack.
+Use the lap slider to move through the race. Cards show only what had happened by that lap, so nothing is spoiled.
+"""
 
 with tab_replay:
-    st.markdown('<p class="pitwall-label">Replay A Finished Race</p>', unsafe_allow_html=True)
-    r_col1, r_col2, r_col3 = st.columns([2, 2, 1])
+    st.markdown(rp.CSS, unsafe_allow_html=True)
+    first_visit = not st.session_state.get("tour_seen")
+    st.session_state["tour_seen"] = True
+    with st.expander("New to F1? 60-second tour", expanded=first_visit):
+        st.markdown(TOUR_STEPS)
+
+    st.markdown(
+        '<div class="rp-banner">This replays a real past race (2018-2023). Gaps, tyres and positions are real. '
+        "Pass-chance figures are model estimates; tick &lsquo;Show model estimates&rsquo; to see them.</div>",
+        unsafe_allow_html=True,
+    )
+    r_col1, r_col2, r_col3 = st.columns([1, 2, 2])
     with r_col1:
         replay_year = st.selectbox("Season", years, index=len(years) - 1, key="replay_year")
     with r_col2:
         replay_circuit = st.selectbox("Circuit", circuits, key="replay_circuit")
     with r_col3:
-        st.markdown("<div style='height: 1.6rem;'></div>", unsafe_allow_html=True)
-        replay_go = st.button("Run Replay", type="primary", use_container_width=True)
+        replay_pick = pick_race(replay_year, replay_circuit, "replay_race")
 
-    if replay_go:
-        with st.spinner("Running live_model over every lap..."):
-            replay_df = replay_race(int(replay_year), replay_circuit)
-
-        if replay_df.empty:
-            st.markdown(
-                '<div class="lights-panel"><div class="lights-caption">No lap data found for that race</div></div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            podium_finishers = (
-                replay_df.drop_duplicates("Driver")
-                .sort_values("FinalPosition")
-                .head(3)["Driver"].tolist()
-            )
-            pivot = replay_df.pivot(index="LapNumber", columns="Driver", values="Probability")
-
-            st.markdown(
-                f'<p class="result-meta">Eventual podium: {", ".join(html.escape(d) for d in podium_finishers)}</p>',
-                unsafe_allow_html=True,
-            )
-            podium_cols = [d for d in podium_finishers if d in pivot.columns]
-            st.line_chart(pivot[podium_cols] if podium_cols else pivot)
-            with st.expander("Full field"):
-                st.line_chart(pivot)
+    if replay_pick is None:
+        st.markdown('<div class="lights-panel"><div class="lights-caption">No lap data found for that race</div></div>', unsafe_allow_html=True)
     else:
-        st.markdown(
-            """
-            <div class="lights-panel">
-              <div class="lights-caption">Pick a finished race to replay its lap-by-lap podium probability</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        view = load_race_view(int(replay_year), replay_pick)
+        lap_key = f"rp_lap_{int(replay_year)}_{replay_pick}"
+        st.session_state.setdefault(lap_key, 0)
+
+        def _step(delta, key=lap_key, mx=view.total):
+            st.session_state[key] = max(0, min(mx, st.session_state[key] + delta))
+
+        n_col1, n_col2, n_col3 = st.columns([1, 1, 8])
+        n_col1.button("◀ Prev", on_click=_step, args=(-1,), use_container_width=True)
+        n_col2.button("Next ▶", on_click=_step, args=(1,), use_container_width=True)
+        lap = n_col3.slider("Lap", 0, view.total, key=lap_key, help="Lap 0 is the starting grid.")
+
+        names = {d: f"{d} · {view.meta[d]['name']}" for d in view.drivers}
+        follow = st.selectbox("Follow a driver", [None] + view.drivers, format_func=lambda d: "Whole field" if d is None else names[d], key="rp_follow")
+        o_col1, o_col2, o_col3 = st.columns(3)
+        spoilers = o_col1.toggle("Hide final result", value=True, key="rp_spoil", help="On: nothing after the selected lap is shown, including the podium.")
+        est_on = o_col2.toggle("Show model estimates", value=False, key="rp_est", disabled=int(replay_year) < 2021, help="Adds model pass-chance bands. Off by default so you see only real data first. Available from 2021, where the model was tested on unseen seasons.")
+        fewer = o_col3.toggle("Fewer markers", value=False, key="rp_fewer", help="Hides pit stops and under-1-second markers for cars you are not following.")
+
+        st.markdown(f'<div class="rp-lap">{"Starting grid" if lap == 0 else f"Lap {lap} of {view.total}"}</div>', unsafe_allow_html=True)
+        if lap > 0 and bool(view.sc.loc[lap].any()):
+            st.markdown('<div class="rp-sc">Safety car or virtual safety car this lap</div>', unsafe_allow_html=True)
+
+        est_map = {}
+        if est_on and lap > 0 and not view.pairs.empty:
+            lp = view.pairs[view.pairs["LapNumber"] == lap]
+            est_map = dict(zip(lp["Trailing"], lp["Band"]))
+            if view.bands:
+                legend = " / ".join(f"{b} {view.bands[b]['lo'] * 100:.1f}-{view.bands[b]['hi'] * 100:.1f}% (observed 1 in {rp.one_in(view.bands[b]['rate'])})" for b in ("Low", "Medium", "High") if b in view.bands)
+                st.caption(f"Pass-chance bands, next 5 laps if the fight stays on track: {legend}.")
+
+        g_tab, b_tab, p_tab, t_tab, m_tab = st.tabs(["Grid", "Battles", "Positions", "Tyres", "Key moments"])
+        with g_tab:
+            cards = view.cards(lap)
+            st.markdown(rp.render_grid(cards, lap, follow, est_map) + rp.render_legend(view), unsafe_allow_html=True)
+            st.caption("Tap a card for the car ahead's tyres and the last few gaps.")
+        with b_tab:
+            more = st.toggle("Show more battles", value=False, key="rp_more")
+            board = view.board(lap, follow, est_on, n=8 if more else 3)
+            st.markdown(rp.render_board(board, est_on, lap), unsafe_allow_html=True)
+        with p_tab:
+            chart = rp.position_chart(view, lap, follow)
+            if chart is not None:
+                st.altair_chart(chart, use_container_width=True)
+        with t_tab:
+            st.markdown(rp.render_stints(view, lap), unsafe_allow_html=True)
+        with m_tab:
+            st.markdown(rp.render_moments(view.moments_upto(lap, follow, fewer), view), unsafe_allow_html=True)
+
+        with st.expander("Model estimate: podium chance (experimental)"):
+            if st.checkbox("Load the podium-chance trace", key="rp_podium"):
+                with st.spinner("Running live_model over every lap..."):
+                    replay_df = replay_race(int(replay_year), replay_circuit, race=replay_pick)
+                if replay_df.empty:
+                    st.caption("No model rows for this race.")
+                else:
+                    pivot = replay_df.pivot(index="LapNumber", columns="Driver", values="Probability")
+                    pivot = pivot[pivot.index <= max(lap, 1)]
+                    if spoilers:
+                        top = pivot.iloc[-1].sort_values(ascending=False).head(5).index.tolist()
+                        st.caption("Top 5 by current podium chance (final result hidden).")
+                    else:
+                        top = replay_df.drop_duplicates("Driver").sort_values("FinalPosition").head(3)["Driver"].tolist()
+                        st.caption(f"Eventual podium: {', '.join(top)}")
+                    st.line_chart(pivot[[d for d in top if d in pivot.columns]])
+        with st.expander("Glossary"):
+            st.markdown("\n".join(f"- **{k}**: {v}" for k, v in rp.GLOSSARY.items()))
 
     st.markdown(
         """
         <div class="f1-footer">
-          Predicted podium probability per lap comes from softmax over live_model's raw
-          scores within that lap's field — see replay_race in phase_4.ipynb.
+          Gaps, positions and tyres are measured at the end of each lap (FastF1 lap data), not live telemetry, so &ldquo;under 1 s&rdquo; is a lap-end snapshot and says nothing about DRS.
+          Pass-chance bands come from battle_model in phase_3_battles.ipynb, validated across 2021-2023.
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+with tab_future:
+    st.markdown(fu.CSS, unsafe_allow_html=True)
+    fmodel = load_future_model()
+    st.markdown(
+        f'<div class="rp-banner">Predicts a race that has not happened yet from the starting grid and recent form (results up to {html.escape(fmodel.m["asof"])}, '
+        f'{html.escape(fmodel.m["latest_race"])}). Each number is the chance of finishing in the top 3; the field adds up to 300%. '
+        "Weather, penalties and first-lap incidents are not modelled.</div>",
+        unsafe_allow_html=True,
+    )
+    circ_names = fmodel.circuits.set_index("Location")["CircuitName"].sort_values()
+    locs = circ_names.index.tolist()
+    f_col1, f_col2 = st.columns([1, 1])
+    circuit_loc = f_col1.selectbox("Circuit", locs, index=locs.index("yas_marina") if "yas_marina" in locs else 0, format_func=lambda k: circ_names[k], key="fut_circuit")
+    recent = fmodel.recent_grids[["Round", "Race"]].drop_duplicates().sort_values("Round", ascending=False)
+    prefill_opts = ["Estimated from current form"] + [f"Actual grid: {r.Race}" for r in recent.itertuples()]
+    prefill = f_col2.selectbox("Starting grid", prefill_opts, key="fut_prefill", help="Start from an estimate, or copy a real recent grid and edit it. After Saturday qualifying, enter the real grid.")
+
+    if prefill == prefill_opts[0]:
+        order = fmodel.default_order()
+        base = pd.DataFrame({"Driver": order, "Grid": range(1, len(order) + 1)})
+    else:
+        gr = fmodel.recent_grids[fmodel.recent_grids["Race"] == prefill.replace("Actual grid: ", "")]
+        gr = gr[gr["Driver"].isin(fmodel.current_drivers.index)].sort_values("GridPosition")
+        base = pd.DataFrame({"Driver": gr["Driver"].tolist(), "Grid": range(1, len(gr) + 1)})
+        missing = [d for d in fmodel.current_drivers.index if d not in set(base["Driver"])]
+        base = pd.concat([base, pd.DataFrame({"Driver": missing, "Grid": range(len(base) + 1, len(base) + len(missing) + 1)})], ignore_index=True)
+    base["Team"] = base["Driver"].map(fmodel.current_drivers["TeamKey"])
+    base["Quali gap to pole (%)"] = np.nan
+    team_opts = sorted(fmodel.teams.index)
+
+    edited = st.data_editor(
+        base[["Driver", "Team", "Grid", "Quali gap to pole (%)"]],
+        key=f"fut_editor_{circuit_loc}_{prefill}", hide_index=True, use_container_width=True, num_rows="fixed",
+        column_config={
+            "Driver": st.column_config.TextColumn(disabled=True),
+            "Team": st.column_config.SelectboxColumn(options=team_opts, help="Change this to ask 'what if this driver were at another team'."),
+            "Grid": st.column_config.NumberColumn(min_value=1, max_value=len(base), step=1),
+            "Quali gap to pole (%)": st.column_config.NumberColumn(min_value=0.0, max_value=10.0, help="Optional. Leave blank to use the typical gap for that grid slot."),
+        },
+    )
+    focus_opts = [None] + edited["Driver"].tolist()
+    fut_names = fmodel.drivers["FullName"].to_dict()
+    focus = st.selectbox("Highlight a driver", focus_opts, format_func=lambda d: "Whole field" if d is None else f"{d} · {fut_names.get(d, '')}", key="fut_focus")
+
+    if edited["Grid"].isna().any() or edited["Grid"].duplicated().any():
+        st.warning("Each driver needs a different grid position. Fix the duplicates in the table to see predictions.")
+    else:
+        entries = [
+            {"driver": r["Driver"], "team": r["Team"], "grid": int(r["Grid"]), "gap": r["Quali gap to pole (%)"]}
+            for r in edited.to_dict("records")
+        ]
+        mob = fmodel.circuits.set_index("Location")["CircuitMobility"].get(circuit_loc)
+        results = fmodel.predict(entries, None if pd.isna(mob) else float(mob))
+        sel = next((r for r in results if r["driver"] == focus), None)
+        if sel:
+            rank = sorted(results, key=lambda x: -x["p"]).index(sel) + 1
+            st.markdown(
+                f'<div class="rp-board"><b>{html.escape(fut_names.get(focus, focus))}</b> ({html.escape(sel["team"])}) starting P{sel["grid"]}: '
+                f'about <b>{sel["p"] * 100:.0f}%</b> to finish on the podium (model range {sel["lo"] * 100:.0f}&ndash;{sel["hi"] * 100:.0f}%), '
+                f'ranked {rank} of {len(results)} in the field. Grid-slot-only baseline: {sel["baseline"] * 100:.0f}%.</div>',
+                unsafe_allow_html=True,
+            )
+        total = sum(r["p"] for r in results)
+        st.markdown(fu.render_results(results, fu.TEAM_COLORS, fut_names, focus), unsafe_allow_html=True)
+        pooled = fmodel.m["pooled"]
+        st.caption(
+            f"Total across the field: {total * 100:.0f}% (three podium places). Backtest 2022 to {fmodel.m['latest_year']}, pooled: "
+            f"model Brier {pooled['model']['brier']:.4f} vs grid-slot baseline {pooled['slot']['brier']:.4f} (lower is better); AUC {pooled['model']['auc']:.3f} vs {pooled['slot']['auc']:.3f}."
+            + ("" if fmodel.m["ship_model"] else " The model did not clearly beat the baseline, so treat these as indicative.")
+        )
+    with st.expander("How to read this"):
+        st.markdown(
+            "- **Number:** chance of a top-3 finish. **Bar:** how much the estimate moves if the model is refit on slightly different past races (not a forecast of race-day luck); the white tick is the central estimate.\n"
+            "- **Car pace** comes from recent races, weighted toward the current season. After a rule change (2022, 2026) older seasons count for very little.\n"
+            "- **Drivers or teams with few races** (a rookie, a new team) get a cautious prior and a wider range.\n"
+            "- **Not modelled:** weather, grid penalties applied after qualifying, first-lap collisions, strategy gambles."
+        )
