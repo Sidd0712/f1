@@ -30,6 +30,8 @@ GLOSSARY = {
     "DRS": "A flap on the rear wing a chasing car can open within one second on straights. Used in 2018-2025, removed in 2026.",
     "Dirty air": "Turbulence behind a car that reduces the follower's grip and makes close following harder.",
     "Podium": "The top three finishers.",
+    "Podium chance": "Model estimate that this car finishes in the top three. Up to half distance it blends pre-race form with the race so far; after that it follows the running order, which no model beat late in a race.",
+    "Win chance": "Model estimate that this car wins, shared among the top four. Experimental: it beats 'the leader wins' mid-race, but not provably in the last laps.",
 }
 
 
@@ -351,8 +353,8 @@ def _chip(comp):
     return f'<span class="rp-chip" style="background:{COMPOUND_COLORS.get(c, "#444")};color:{COMPOUND_TEXT.get(c, "#fff")}">{COMPOUND_LETTER.get(c, "?")}</span>'
 
 
-def render_grid(cards, lap, follow=None, est=None):
-    est = est or {}
+def render_grid(cards, lap, follow=None, est=None, live=None):
+    est, live = est or {}, live or {}
     items = []
     for c in cards:
         color = c["color"]
@@ -381,6 +383,11 @@ def render_grid(cards, lap, follow=None, est=None):
             tags += f'<span class="rp-tag {cls}" title="{html.escape(hint, quote=True)}">{html.escape(t)}</span>'
         if c["code"] in est:
             tags += f'<span class="rp-tag est" title="Model estimate: chance of an on-track pass in the next 5 laps">Pass {est[c["code"]]}</span>'
+        if c["code"] in live and not c["out"]:
+            podium, win = live[c["code"]]
+            tags += f'<span class="rp-tag est" title="{html.escape(GLOSSARY["Podium chance"], quote=True)}">Podium {podium:.0%}</span>'
+            if win >= 0.01:
+                tags += f'<span class="rp-tag est" title="{html.escape(GLOSSARY["Win chance"], quote=True)}">Win {win:.0%}</span>'
         detail = ""
         if not c["out"] and c["ahead"]:
             hist = ", ".join("?" if h is None else f"{h:.1f}" for h in c["history"])
@@ -412,8 +419,20 @@ def render_legend(view):
 def render_board(items, est_on, lap):
     if not items:
         return '<div class="rp-board">No two cars are within 3 seconds of each other on this lap.</div>'
-    foot = '<div class="rp-legend">Data is 2018-2023 (DRS era). 2026 cars have no DRS, so real battle rates will differ.</div>'
+    foot = '<div class="rp-legend">Pass chances are learned mostly from DRS-era races (2018-2025). 2026 cars have no DRS, so real battle rates may differ.</div>'
     return "".join(f'<div class="rp-board">{i["text"]}</div>' for i in items) + foot
+
+
+def live_note(bt):
+    # one-line honest summary of the walk-forward backtest vs the running order
+    if bt is None or bt.empty:
+        return ""
+    row = lambda t, w: bt[(bt["Target"] == t) & (bt["Window"] == w)].iloc[0]
+    p, w = row("Podium", "0-50%"), row("Winner", "70-100%")
+    pts = lambda r: f"{r.Gain * 100:+.1f} pts [{r.CI_Lo * 100:+.1f}, {r.CI_Hi * 100:+.1f}]"
+    return (f"Backtest on unseen seasons: in the first half of a race the podium pick beats the running order by {pts(p)} "
+            f"({p.Model:.0%} vs {p.RunningOrder:.0%}); after half distance it follows the running order. "
+            f"Winner pick in the last 30%: {pts(w)} vs 'the leader wins'" + ("" if w.Ship else ", not yet better than chance, so treat it as experimental") + ".")
 
 
 def render_moments(events, view):

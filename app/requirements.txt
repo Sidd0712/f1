@@ -7,4 +7,3 @@ streamlit
 xgboost
 numpy
 pandas
-mlflow

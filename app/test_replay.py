@@ -28,6 +28,13 @@ def test_replay():
     assert not any(e["lap"] > 2 for e in v.moments_upto(2))
     assert rp.team_color("zz") == rp.FALLBACK_COLOR
     assert "<details" in rp.render_grid(v.cards(4), 4)
+    html_live = rp.render_grid(v.cards(4), 4, live={"B": (0.82, 0.41), "A": (0.7, 0.004), "C": (0.5, 0.2)})
+    assert "Podium 82%" in html_live and "Win 41%" in html_live and "Win 0%" not in html_live
+    assert "Podium 50%" not in html_live  # retired car gets no estimate
+    bt = pd.DataFrame([dict(Target="Podium", Window="0-50%", Model=.75, RunningOrder=.725, Gain=.025, CI_Lo=.008, CI_Hi=.043, Ship=True),
+                       dict(Target="Winner", Window="70-100%", Model=.915, RunningOrder=.887, Gain=.028, CI_Lo=-.005, CI_Hi=.068, Ship=False)])
+    note = rp.live_note(bt)
+    assert "+2.5 pts" in note and "experimental" in note
 
 
 if __name__ == "__main__":
