@@ -1,0 +1,12 @@
+:root {
+  --bg: #0b0b0f; --panel: #14141b; --panel2: #1c1c25; --line: #2a2a35; --ink: #f2f2f5; --dim: #a6a6b4;
+  --red: #e10600; --redtext: #ff4a3d; --green: #3ddc84; --amber: #e6c34a;
+  --soft: #ff4a3d; --med: #f5c518; --hard: #e8e8ee; --inter: #3ddc84; --wet: #3a8dff; --row: 26px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Titillium Web", system-ui, sans-serif; font-size: 15px; }
+button { font-family: inherit; color: inherit; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+@media (max-width: 820px) { :root { --row: 24px; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }

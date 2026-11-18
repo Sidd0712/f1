@@ -3,3 +3,15 @@ data/
 .claude/
 CLAUDE.md
 docs/
+.superpowers/
+.impeccable/
+research_notes/
+reports/
+site/node_modules/
+site/dist/
+site/public/data/
+site/tsconfig.tsbuildinfo
+__pycache__/
+live/.venv/
+live/.keys/
+live/out/

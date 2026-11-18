@@ -1,0 +1,58 @@
+name: Publish site
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  schedule:
+    - cron: "17 6 * * 1"
+    - cron: "7 7 * * 0"
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - uses: databricks/setup-cli@4f41a4c5291b531c1bb1e5760d677999cd484f89 # v1.25.0
+      - name: Download exported data
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          mkdir -p site/public/data
+          databricks fs cp -r dbfs:/Volumes/workspace/default/f1_data/site_data site/public/data --overwrite
+          test -f site/public/data/index.json
+      - name: Build
+        working-directory: site
+        run: |
+          npm ci
+          npx vitest --run
+          npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

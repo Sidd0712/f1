@@ -1,0 +1,572 @@
+[
+ {
+  "name": "safety car swing",
+  "upTo": 12,
+  "laps": {
+   "10": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.6
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.08
+     }
+    ]
+   },
+   "11": {
+    "sc": true,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.3
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.41
+     }
+    ]
+   },
+   "12": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.3
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.45
+     }
+    ]
+   }
+  },
+  "expected": [
+   {
+    "lap": 11,
+    "driver": "B",
+    "from": 0.08,
+    "to": 0.41,
+    "reason": "Safety car"
+   }
+  ]
+ },
+ {
+  "name": "no event",
+  "upTo": 2,
+  "laps": {
+   "1": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.2
+     }
+    ]
+   },
+   "2": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.5
+     }
+    ]
+   }
+  },
+  "expected": []
+ },
+ {
+  "name": "cooldown",
+  "upTo": 6,
+  "laps": {
+   "1": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.2
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   },
+   "2": {
+    "sc": true,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.6
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   },
+   "3": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.2
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   },
+   "4": {
+    "sc": true,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.6
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   },
+   "5": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.2
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   },
+   "6": {
+    "sc": true,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.6
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.1
+     }
+    ]
+   }
+  },
+  "expected": [
+   {
+    "lap": 2,
+    "driver": "A",
+    "from": 0.2,
+    "to": 0.6,
+    "reason": "Safety car"
+   }
+  ]
+ },
+ {
+  "name": "retirement",
+  "upTo": 3,
+  "laps": {
+   "2": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "C",
+      "pos": 3,
+      "gap": 2,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.5
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.3
+     },
+     {
+      "d": "C",
+      "podium": 0.5,
+      "win": 0.2
+     }
+    ]
+   },
+   "3": {
+    "sc": false,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "B",
+      "pos": 2,
+      "gap": 1,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     },
+     {
+      "d": "C",
+      "pos": null,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": true
+     }
+    ],
+    "battles": [],
+    "live": [
+     {
+      "d": "A",
+      "podium": 0.5,
+      "win": 0.5
+     },
+     {
+      "d": "B",
+      "podium": 0.5,
+      "win": 0.48
+     },
+     {
+      "d": "C",
+      "podium": 0.5,
+      "win": 0.02
+     }
+    ]
+   }
+  },
+  "expected": [
+   {
+    "lap": 3,
+    "driver": "B",
+    "from": 0.3,
+    "to": 0.48,
+    "reason": "C retires"
+   }
+  ]
+ },
+ {
+  "name": "no live data",
+  "upTo": 1,
+  "laps": {
+   "1": {
+    "sc": true,
+    "cars": [
+     {
+      "d": "A",
+      "pos": 1,
+      "gap": null,
+      "lead": null,
+      "cmp": "M",
+      "age": 5,
+      "pit": false,
+      "out": false
+     }
+    ],
+    "battles": [],
+    "live": []
+   }
+  },
+  "expected": []
+ }
+]

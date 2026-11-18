@@ -1,0 +1,17 @@
+.bar { display: flex; align-items: center; gap: 24px; padding: 0 20px; height: 54px; border-bottom: 1px solid var(--line); background: #0e0e13; position: sticky; top: 0; z-index: 5; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 900; font-style: italic; text-transform: uppercase; font-size: 17px; white-space: nowrap; }
+.brand i { width: 6px; height: 22px; background: var(--red); transform: skewX(-18deg); }
+nav.top { display: flex; height: 100%; }
+nav.top a, nav.bottom a { display: flex; align-items: center; padding: 0 14px; color: var(--dim); text-decoration: none; font-weight: 700; font-size: 14px; border-bottom: 3px solid transparent; }
+nav.top a.on { color: var(--ink); border-color: var(--red); }
+.asof { margin-left: auto; font-size: 13px; color: var(--dim); white-space: nowrap; }
+.asof b { color: var(--ink); font-weight: 600; }
+.page { padding: 18px 20px 90px; max-width: 1300px; margin: 0 auto; }
+nav.bottom { display: none; }
+@media (max-width: 820px) {
+  nav.top, .asof { display: none; }
+  nav.bottom { display: flex; position: fixed; bottom: 0; left: 0; right: 0; background: #0e0e13; border-top: 1px solid var(--line); z-index: 6; }
+  nav.bottom a { flex: 1; justify-content: center; padding: 14px 4px; font-size: 13px; border-bottom: none; border-top: 3px solid transparent; min-height: 52px; }
+  nav.bottom a.on { color: var(--ink); border-top-color: var(--red); }
+  .page { padding: 14px 12px 80px; }
+}
