@@ -13,9 +13,9 @@ function Tyre({ cmp, age }: { cmp: string | null; age: number | null }) {
   return <span className="tyre"><i style={{ borderColor: TYRE[cmp] ?? "var(--dim)" }}>{cmp}</i>{age ?? ""}</span>;
 }
 
-function forecastText(b: BattleView) {
+export function forecastText(b: Pick<BattleView, "forecast" | "leading">) {
   const f = b.forecast;
-  if (f.kind === "catch") return `Catches him in ${f.lo} to ${f.hi} laps`;
+  if (f.kind === "catch") return `Catches ${b.leading} in ${f.lo === f.hi ? `${f.lo} lap${f.lo === 1 ? "" : "s"}` : `${f.lo} to ${f.hi} laps`}`;
   if (f.kind === "runsOut") return "Race runs out first";
   return "Within 1s now";
 }

@@ -7,7 +7,7 @@ on:
     paths: ["site/**", ".github/workflows/site.yml"]
   schedule:
     - cron: "17 6 * * 1"
-    - cron: "47 21 * * 6"
+    - cron: "7 7 * * 0"
 
 permissions:
   contents: read

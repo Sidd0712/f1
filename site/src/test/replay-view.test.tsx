@@ -115,3 +115,9 @@ test("while a lap is loading the tower says so instead of showing the grid", asy
   expect(await screen.findByText("Loading lap 10…")).toBeInTheDocument();
   expect(screen.queryByText("Leader")).toBeNull();
 });
+
+import { forecastText } from "../views/Board";
+test("catch forecast names the car ahead and reads naturally when the range is one lap", () => {
+  expect(forecastText({ leading: "VER", forecast: { kind: "catch", lo: 1, hi: 1 } as never })).toBe("Catches VER in 1 lap");
+  expect(forecastText({ leading: "VER", forecast: { kind: "catch", lo: 3, hi: 5 } as never })).toBe("Catches VER in 3 to 5 laps");
+});
