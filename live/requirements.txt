@@ -1,0 +1,7 @@
+pandas
+numpy
+xgboost
+scikit-learn
+pywebpush==2.0.3
+fastf1==3.9.2
+pytest
