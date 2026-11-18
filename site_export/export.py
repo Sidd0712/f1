@@ -240,7 +240,7 @@ def write_site_data(tables, calendar, out_dir, as_of):
     t = tables
     state, results, live, pairs, prior = t["f1_replay_lap_state"], t["f1_race_results"], t["f1_live_predictions"], t["f1_battle_pairs"], t["f1_podium_prior_oof"]
     idx = race_index(results, state, live, prior)
-    _write(out / "index.json", dict(asOf=as_of, races=idx, calendar=calendar, teams=team_table(state), runningOrder=running_order_table(state, results), weekendGrid=weekend_grid(results, calendar, as_of)))
+    _write(out / "index.json", dict(asOf=as_of, races=idx, calendar=calendar, teams=team_table(state), runningOrder=running_order_table(state, results), weekendGrid=weekend_grid(pd.concat([results, t.get("f1_quali_results", pd.DataFrame())]), calendar, as_of)))
     _write(out / "podium.json", podium_bundle(t["f1_podium_model"]["Json"].iloc[0], t["f1_podium_driver_form"], t["f1_podium_team_form"], t["f1_podium_circuits"], t["f1_podium_recent_grids"]))
     _write(out / "howweknow.json", how_we_know(t["f1_live_backtest"], t["f1_podium_backtest"], t["f1_battle_bands"]))
     _write(out / "strategy.json", strategy_profiles(state))

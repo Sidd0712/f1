@@ -240,3 +240,12 @@ def test_strategy_skips_unknown_compounds():
 def test_compound_letters():
     assert [ex.compound_letter(c) for c in ("SOFT", "MEDIUM", "HARD", "INTERMEDIATE", "WET", "HYPERSOFT", "ULTRASOFT", "SUPERSOFT", "nan", "UNKNOWN", None, "TEST_UNKNOWN")] == \
         ["S", "M", "H", "I", "W", "S", "S", "S", None, None, None, None]
+
+
+def test_write_uses_quali_only_table(tmp_path):
+    t = tables()
+    t["f1_quali_results"] = pd.DataFrame([dict(Year=2026, Round=22, Race="Las Vegas Grand Prix", Driver=d, TeamKey=k, QualiPosition=p)
+                                          for d, k, p in [("VER", "Red Bull Racing", 2.0), ("HAM", "Mercedes", 1.0)]])
+    ex.write_site_data(t, ex.calendar_from_jolpica(jolpica_payload()), str(tmp_path), "2026-11-17")
+    wg = json.loads((tmp_path / "index.json").read_text(encoding="utf8"))["weekendGrid"]
+    assert wg["round"] == 22 and [g["driver"] for g in wg["grid"]] == ["HAM", "VER"]
