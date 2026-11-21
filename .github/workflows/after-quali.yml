@@ -3,7 +3,7 @@ name: Grid after qualifying
 on:
   workflow_dispatch:
   schedule:
-    - cron: "41 * * * 5,6,0"
+    - cron: "11,41 * * * 5,6,0"
 
 permissions:
   actions: write
@@ -26,15 +26,22 @@ jobs:
         run: |
           databricks fs cp dbfs:/Volumes/workspace/default/f1_data/site_data/index.json index.json --overwrite
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import json, datetime as dt
+          import json, datetime as dt, urllib.request
           d = json.load(open("index.json"))
           now = dt.datetime.now(dt.timezone.utc)
           at = lambda s: dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
           wg = d.get("weekendGrid") or {}
           due = [c for c in d["calendar"] if c["sessions"].get("quali") and c["sessions"].get("race")
-                 and 3 <= (now - at(c["sessions"]["quali"])).total_seconds() / 3600 < 12 and now < at(c["sessions"]["race"])
+                 and at(c["sessions"]["quali"]) + dt.timedelta(hours=2) <= now < at(c["sessions"]["race"])
                  and (wg.get("year"), wg.get("round")) != (c["year"], c["round"])]
-          print(f"run={'true' if due else 'false'}")
+          # results must be on Jolpica first, or the 25-min job exports no grid
+          def published(c):
+              try:
+                  with urllib.request.urlopen(f"https://api.jolpi.ca/ergast/f1/{c['year']}/{c['round']}/qualifying.json", timeout=30) as r:
+                      return bool(json.load(r)["MRData"]["RaceTable"]["Races"])
+              except Exception:
+                  return False
+          print(f"run={'true' if any(published(c) for c in due) else 'false'}")
           EOF
       - name: Run the Databricks grid job (results + site export)
         if: steps.due.outputs.run == 'true'
